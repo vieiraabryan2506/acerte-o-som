@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Acerte o Som – Spotify</title>
+<style>
+:root{--bg:#f4f0ff;--ink:#1b1030;--mut:#6b5f8a;--card:#fff;--acc:#e0356a;--acc2:#0f9fa8;--line:#d9d0f0}
+@media (prefers-color-scheme:dark){:root{--bg:#1b1030;--ink:#f1ecff;--mut:#a99bd0;--card:#271845;--acc:#ff5c8a;--acc2:#5ce1e6;--line:#3b2a66}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.45;padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0)}
+main{max-width:520px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:2.2rem;font-weight:800;margin:8px 0 4px;letter-spacing:-.02em}
+p{margin:0 0 14px;color:var(--mut)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px}
+label{display:block;font-weight:600;margin:0 0 6px}
+button{font:inherit;font-weight:600;border:0;border-radius:12px;padding:12px 16px;cursor:pointer;background:var(--acc);color:#fff}
+button.alt{background:transparent;color:var(--ink);border:1px solid var(--line)}
+button:disabled{opacity:.4;cursor:default}
+button:focus-visible,input:focus-visible{outline:3px solid var(--acc2);outline-offset:2px}
+input{font:inherit;width:100%;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--ink);margin-bottom:10px}
+code{background:var(--bg);padding:2px 6px;border-radius:6px;word-break:break-all}
+.row{display:flex;gap:8px;flex-wrap:wrap}.row>*{flex:1}
+.hidden{display:none}
+.bars{display:flex;gap:4px;align-items:flex-end;height:90px;margin:8px 0 16px}
+.bars i{flex:1;background:var(--acc);border-radius:4px;height:12%;transition:height .2s}
+.playing .bars i{animation:b .6s ease-in-out infinite alternate}
+.bars i:nth-child(3n){animation-delay:.1s;background:var(--acc2)}.bars i:nth-child(3n+1){animation-delay:.25s}
+@keyframes b{to{height:100%}}
+@media (prefers-reduced-motion:reduce){.playing .bars i{animation:none;height:60%}}
+.msg{min-height:1.5em;font-weight:600;margin:6px 0 0}.no{color:var(--acc)}
+.big{font-size:1.5rem;font-weight:800}
+</style>
+</head>
+<body>
+<main>
+<h1>Acerte o Som</h1>
+
+<section id="login">
+  <div class="card">
+    <p>Passo único: crie um app em developer.spotify.com/dashboard e cole aqui o Client ID. No app, cadastre exatamente este endereço como Redirect URI:</p>
+    <p><code id="redir"></code></p>
+    <label for="cid">Client ID do Spotify</label>
+    <input id="cid" type="text" autocomplete="off">
+    <button id="go" style="width:100%">Entrar com Spotify</button>
+    <p class="msg no" id="lmsg"></p>
+  </div>
+</section>
+
+<section id="setup" class="hidden">
+  <div class="card">
+    <label for="pl">Link da playlist</label>
+    <input id="pl" type="text" placeholder="https://open.spotify.com/playlist/…" autocomplete="off">
+    <label for="n">Quantas músicas na partida?</label>
+    <input id="n" type="number" min="1" max="50" value="10">
+    <button id="start" style="width:100%">Começar jogo</button>
+    <p class="msg" id="smsg"></p>
+    <p style="margin:10px 0 0">Funciona só com playlists que você criou ou que você colabora.</p>
+  </div>
+</section>
+
+<section id="game" class="hidden">
+  <div class="card" id="stage">
+    <p id="prog"></p>
+    <div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="row"><button id="replay">Ouvir o trecho</button><button id="more" class="alt">Mais dica</button></div>
+    <p id="hint" style="margin:10px 0 0"></p>
+  </div>
+  <div class="card" id="guessbox">
+    <input id="guess" type="text" list="titles" placeholder="Qual é a música?" autocomplete="off">
+    <datalist id="titles"></datalist>
+    <div class="row"><button id="send">Responder</button><button id="skip" class="alt">Pular</button></div>
+    <p class="msg" id="msg"></p>
+  </div>
+  <button id="next" class="hidden" style="width:100%">Próxima</button>
+</section>
+
+<section id="end" class="hidden">
+  <div class="card"><p>Fim de jogo</p><div class="big" id="final"></div></div>
+  <div class="row"><button id="again">Jogar de novo</button><button id="back" class="alt">Outra playlist</button></div>
+</section>
+</main>
+<audio id="au" preload="auto"></audio>
+<script>
+(function(){
+var $=function(i){return document.getElementById(i)}, au=$("au"), stage=$("stage");
+var STEPS=[1,3,6,10], REDIR=location.origin+location.pathname, API="https://api.spotify.com/v1/";
+var tok="", songs=[], order=[], idx=0, played=0, total=10, step=0, score=0, start=0, timer=null, done=false;
+function show(id){["login","setup","game","end"].forEach(function(s){$(s).classList.toggle("hidden",s!==id)})}
+function norm(s){return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9]/g,"")}
+function ct(t){return (t.replace(/\s*[\(\[].*?[\)\]]/g,"").replace(/\s+-\s+.*$/,"").trim())||t}
+function rand(n){var a=new Uint8Array(n),s="";crypto.getRandomValues(a);a.forEach(function(x){s+="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[x%62]});return s}
+function ss(k,v){try{if(v===undefined)return sessionStorage.getItem(k);sessionStorage.setItem(k,v)}catch(e){return null}}
+function ls(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v)}catch(e){return null}}
+
+$("redir").textContent=REDIR;
+$("cid").value=ls("cid")||"";
+
+$("go").onclick=async function(){
+  var cid=$("cid").value.trim();
+  if(!cid){$("lmsg").textContent="Cole o Client ID primeiro.";return}
+  ls("cid",cid);
+  var v=rand(64);ss("ver",v);
+  var h=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(v));
+  var c=btoa(String.fromCharCode.apply(null,new Uint8Array(h))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+  var q=new URLSearchParams({client_id:cid,response_type:"code",redirect_uri:REDIR,code_challenge_method:"S256",code_challenge:c,scope:"playlist-read-private playlist-read-collaborative"});
+  location.href="https://accounts.spotify.com/authorize?"+q;
+};
+
+async function init(){
+  var code=new URLSearchParams(location.search).get("code");
+  if(code){
+    history.replaceState(null,"",REDIR);
+    try{
+      var r=await fetch("https://accounts.spotify.com/api/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},
+        body:new URLSearchParams({client_id:ls("cid")||"",grant_type:"authorization_code",code:code,redirect_uri:REDIR,code_verifier:ss("ver")||""})});
+      var j=await r.json();
+      if(!j.access_token)throw 0;
+      ss("tok",j.access_token);ss("exp",String(Date.now()+(j.expires_in-60)*1000));
+    }catch(e){$("lmsg").textContent="Não deu para entrar. Confira o Client ID e o Redirect URI.";return}
+  }
+  var t=ss("tok");
+  if(t&&Date.now()<Number(ss("exp")||0)){tok=t;show("setup")}
+}
+
+async function loadPlaylist(link){
+  var m=link.match(/playlist[\/:]([A-Za-z0-9]+)/);
+  if(!m)throw "Esse não parece um link de playlist do Spotify.";
+  var url=API+"playlists/"+m[1]+"/items?limit=50",all=[];
+  while(url&&all.length<200){
+    var r=await fetch(url,{headers:{Authorization:"Bearer "+tok}});
+    if(r.status===401){ss("tok","");throw "A sessão expirou. Recarregue a página e entre de novo."}
+    if(r.status===403||r.status===404)throw "O Spotify não liberou essa playlist. Use uma que você criou ou colabora.";
+    if(!r.ok)throw "Erro do Spotify ("+r.status+").";
+    var j=await r.json();
+    (j.items||[]).forEach(function(e){
+      var t=e.item||e.track;
+      if(t&&t.name&&t.type!=="episode")all.push({title:ct(t.name),artist:(t.artists&&t.artists[0]&&t.artists[0].name)||"",sp:t.preview_url||""});
+    });
+    url=j.next;
+  }
+  return all;
+}
+
+async function preview(s){
+  if(s.prev!==undefined)return s.prev;
+  var p=s.sp;
+  if(!p){
+    try{
+      var r=await fetch("https://itunes.apple.com/search?media=music&entity=song&limit=8&term="+encodeURIComponent(s.artist+" "+s.title));
+      var j=await r.json(),nt=norm(s.title),na=norm(s.artist);
+      var hit=(j.results||[]).find(function(x){return x.previewUrl&&norm(x.trackName).indexOf(nt)>-1&&norm(x.artistName).indexOf(na)>-1});
+      p=hit?hit.previewUrl:"";
+    }catch(e){p=""}
+  }
+  s.prev=p;return p;
+}
+
+$("start").onclick=async function(){
+  $("smsg").className="msg";$("smsg").textContent="Carregando playlist…";
+  try{
+    songs=await loadPlaylist($("pl").value);
+    if(!songs.length)throw "A playlist está vazia.";
+  }catch(e){$("smsg").className="msg no";$("smsg").textContent=String(e);return}
+  total=Math.max(1,Math.min(50,Number($("n").value)||10));
+  newGame();
+};
+function newGame(){
+  order=songs.slice();
+  for(var i=order.length-1;i>0;i--){var j=Math.floor(Math.random()*(i+1)),t=order[i];order[i]=order[j];order[j]=t}
+  idx=0;played=0;score=0;
+  $("titles").innerHTML="";
+  songs.forEach(function(s){var o=document.createElement("option");o.value=s.title;$("titles").appendChild(o)});
+  show("game");round();
+}
+
+async function round(){
+  done=false;step=0;$("msg").textContent="";$("msg").className="msg";$("guess").value="";
+  $("guessbox").classList.remove("hidden");$("next").classList.add("hidden");$("more").disabled=false;
+  $("hint").textContent="Procurando o trecho…";
+  var p="";
+  while(idx<order.length&&!(p=await preview(order[idx])))idx++;
+  if(!p){finish();return}
+  $("prog").textContent="Música "+(played+1)+" de "+total+" · Pontos: "+score;
+  au.src=p;
+  au.onloadedmetadata=function(){
+    var d=au.duration||30,max=Math.max(0,d-STEPS[STEPS.length-1]-1);
+    start=Math.random()*max;play();
+  };
+  au.load();
+}
+function play(){
+  clearTimeout(timer);
+  var len=STEPS[step];
+  $("hint").textContent="Trecho de "+len+" segundo"+(len>1?"s":"")+". Acertar agora vale "+(STEPS.length-step)+" ponto(s).";
+  au.currentTime=start;
+  var p=au.play();if(p&&p.catch)p.catch(function(){});
+  stage.classList.add("playing");
+  timer=setTimeout(function(){au.pause();stage.classList.remove("playing")},len*1000);
+}
+$("replay").onclick=function(){if(!done)play()};
+$("more").onclick=function(){
+  if(done)return;
+  if(step<STEPS.length-1){step++;play()}
+  if(step>=STEPS.length-1)$("more").disabled=true;
+};
+function reveal(ok){
+  done=true;clearTimeout(timer);au.pause();stage.classList.remove("playing");
+  $("guessbox").classList.add("hidden");$("next").classList.remove("hidden");
+  $("next").textContent=played+1<total?"Próxima":"Ver resultado";
+  var s=order[idx],b=document.createElement("span");b.className="big";b.textContent=s.title+(s.artist?" – "+s.artist:"");
+  $("hint").textContent=ok?"Acertou! Era ":"Era ";$("hint").appendChild(b);
+  $("prog").textContent="Música "+(played+1)+" de "+total+" · Pontos: "+score;
+}
+function check(){
+  if(done)return;
+  var g=norm($("guess").value),t=norm(order[idx].title);
+  if(!g)return;
+  if(g===t||(g.length>=5&&t.indexOf(g)>-1)){score+=STEPS.length-step;reveal(true)}
+  else{$("msg").textContent="Não é essa. Tente de novo ou peça mais dica.";$("msg").className="msg no"}
+}
+$("send").onclick=check;
+$("guess").addEventListener("keydown",function(e){if(e.key==="Enter")check()});
+$("skip").onclick=function(){reveal(false)};
+$("next").onclick=function(){
+  played++;idx++;
+  if(played<total)round();else finish();
+};
+function finish(){
+  au.pause();
+  $("final").textContent=score+" de "+(played*STEPS.length)+" pontos";
+  show("end");
+}
+$("again").onclick=newGame;
+$("back").onclick=function(){show("setup")};
+init();
+})();
+</script>
+</body>
+</html>
